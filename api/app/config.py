@@ -1,6 +1,5 @@
 from functools import lru_cache
 from pathlib import Path
-import os
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,10 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 class Settings(BaseSettings):
     app_env: str = "development"
     database_url: str | None = None
-    fleetmix_secret_key: str = "local-only-change-before-deploy"
-    fleetmix_demo_password: str = "FleetMixDemo!2026"
     fleetmix_seed_xlsx: str | None = None
-    session_ttl_seconds: int = 60 * 60 * 10
     worker_poll_seconds: float = 1.0
     optimizer_time_limit_seconds: int = 10
 
@@ -36,10 +32,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    settings = Settings()
-    if settings.app_env.lower() == "production":
-        if settings.fleetmix_secret_key == "local-only-change-before-deploy":
-            raise RuntimeError("FLEETMIX_SECRET_KEY must be set outside local development")
-        if settings.fleetmix_demo_password == "FleetMixDemo!2026":
-            raise RuntimeError("Set FLEETMIX_DEMO_PASSWORD before production startup")
-    return settings
+    return Settings()

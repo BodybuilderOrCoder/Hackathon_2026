@@ -2,13 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Activity, AlertCircle, ArrowDownRight, ArrowLeftRight, ArrowRight, BadgeCheck, Boxes, Building2, CalendarDays,
+  Activity, AlertCircle, ArrowDownRight, ArrowLeftRight, BadgeCheck, Boxes, Building2, CalendarDays,
   Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, ClipboardCheck, ClipboardList, Clock3, CloudUpload,
-  Download, FileSpreadsheet, Fuel, LayoutDashboard, LoaderCircle, LogOut, MapPin, Package, PackageCheck,
+  Download, FileSpreadsheet, Fuel, LayoutDashboard, LoaderCircle, MapPin, Package, PackageCheck,
   Plus, RefreshCw, Route, Search, ShieldCheck, Truck, UserRound, Users, Wallet, X,
 } from "lucide-react";
 
-type User = { id: string; name: string; email: string; employee_code: string; department: string; position: string };
 type Pallet = { id: string; sku_id: string; sku_name: string; base_uom: string; description: string; weight_kg: number; length_cm: number; width_cm: number; height_cm: number; volume_m3: number; stackable: boolean; rotation_rule: string; handling_code: string };
 type Order = { id: string; external_id: string; customer_id: string; customer_name: string; location_id: string; location_name: string; zone: string; latitude: number; longitude: number; address: string; ready_at: string; due_at: string; service_min: number; priority: string; status: string; total_weight_kg: number; total_volume_m3: number; minimum_vehicle_class: string; notes: string; pallets: Pallet[] };
 type Vehicle = { id: string; name: string; fleet_type: string; class_id: string; class_rank: number; capacity_kg: number; usable_volume_m3: number; inner_length_cm: number; inner_width_cm: number; inner_height_cm: number; status: string; available_from: string; available_until: string };
@@ -56,7 +55,6 @@ const compact = (value: number) => new Intl.NumberFormat("vi-VN", { maximumFract
 const dateLabel = (value: string) => new Intl.DateTimeFormat("vi-VN", { weekday: "long", day: "2-digit", month: "long", year: "numeric" }).format(new Date(value));
 
 export function DispatchBoard() {
-  const [user, setUser] = useState<User | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [fleet, setFleet] = useState<Vehicle[]>([]);
@@ -72,16 +70,13 @@ export function DispatchBoard() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [loginEmail, setLoginEmail] = useState("minh.anh@anphuc-logistics.example");
-  const [loginPassword, setLoginPassword] = useState("FleetMixDemo!2026");
-  const [loginBusy, setLoginBusy] = useState(false);
   const [draggedOrder, setDraggedOrder] = useState<string | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [quoteText, setQuoteText] = useState("");
   const [quoteResult, setQuoteResult] = useState<Record<string, unknown> | null>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importPreview, setImportPreview] = useState<Record<string, unknown> | null>(null);
-  const [employeeForm, setEmployeeForm] = useState({ employee_code: "", name: "", email: "", position: "Nhân viên logistics", password: "" });
+  const [employeeForm, setEmployeeForm] = useState({ employee_code: "", name: "", email: "", position: "Nhân viên logistics" });
 
   const refresh = useCallback(async () => {
     const [d, o, f, p, q, e, a, customerMaster, productMaster] = await Promise.all([
@@ -95,7 +90,7 @@ export function DispatchBoard() {
 
   useEffect(() => {
     let active = true;
-    api<User>("/api/backend/auth/me").then((value) => { if (active) { setUser(value); return refresh(); } }).catch(() => undefined);
+    refresh().catch((e) => { if (active) setError(e instanceof Error ? e.message : "Không tải được dữ liệu điều vận"); });
     return () => { active = false; };
   }, [refresh]);
 
@@ -107,14 +102,6 @@ export function DispatchBoard() {
     const order = orders.find((o) => o.id === stop.order_id);
     return (order?.pallets ?? []).map((pallet) => ({ ...pallet, stop: stop.sequence, drop: stop.location_name }));
   }) : [], [selected, orders]);
-
-  async function signIn(event: React.FormEvent) {
-    event.preventDefault(); setLoginBusy(true); setError("");
-    try { const value = await api<{ user: User }>("/api/backend/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: loginEmail, password: loginPassword }) }); setUser(value.user); await refresh(); }
-    catch (e) { setError(e instanceof Error ? e.message : "Không thể đăng nhập"); } finally { setLoginBusy(false); }
-  }
-
-  async function signOut() { await api("/api/backend/auth/logout", { method: "POST" }).catch(() => undefined); setUser(null); setDashboard(null); setPlan(null); }
 
   async function runOptimize() {
     setBusy("optimize"); setError(""); setNotice("Đang lập tuyến và kiểm tra tải theo pallet…");
@@ -176,22 +163,20 @@ export function DispatchBoard() {
 
   async function addEmployee(event: React.FormEvent) {
     event.preventDefault(); setBusy("employee"); setError("");
-    try { await api("/api/backend/employees", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(employeeForm) }); await refresh(); setEmployeeForm({ employee_code: "", name: "", email: "", position: "Nhân viên logistics", password: "" }); setNotice("Đã thêm hồ sơ nhân viên logistics."); }
+    try { await api("/api/backend/employees", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(employeeForm) }); await refresh(); setEmployeeForm({ employee_code: "", name: "", email: "", position: "Nhân viên logistics" }); setNotice("Đã thêm hồ sơ nhân viên logistics."); }
     catch (e) { setError(e instanceof Error ? e.message : "Không tạo được nhân viên"); } finally { setBusy(""); }
   }
-
-  if (!user) return <LoginPage email={loginEmail} password={loginPassword} setEmail={setLoginEmail} setPassword={setLoginPassword} onSubmit={signIn} loading={loginBusy} error={error} />;
 
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark"><Boxes size={20} /></div><div><strong>fleetmix<span>AI</span></strong><small>HỆ THỐNG VẬN HÀNH LOGISTICS</small></div></div>
       <div className="workspace"><div className="workspace-icon"><Building2 size={16} /></div><div><strong>{dashboard?.organization.display_name ?? "Đơn vị logistics"}</strong><small>{dashboard?.organization.business_unit ?? "Vận hành logistics"}</small></div><ChevronDown size={15} /></div>
       <nav className="navigation">{["VẬN HÀNH", "MUA DỊCH VỤ VẬN TẢI", "KIỂM SOÁT NGHIỆP VỤ", "DANH MỤC CHỦ"].map((group) => <div className="nav-group" key={group}><span className="nav-caption">{group}</span>{navItems.filter((item) => item.group === group).map((item) => { const Icon = item.icon; return <button key={item.id} className={`nav-item ${tab === item.id ? "active" : ""}`} onClick={() => setTab(item.id)}><Icon size={17} /><span>{item.label}</span>{item.id === "orders" && <b>{dashboard?.metrics.orders_ready ?? 0}</b>}</button>; })}</div>)}</nav>
-      <div className="sidebar-bottom"><div className="health-dot"><i />Hệ thống hoạt động</div><div className="user-card"><div className="avatar">{user.name.slice(0,1).toUpperCase()}</div><div className="user-meta"><strong>{user.name}</strong><small>{user.employee_code || "Nhân viên logistics"} · {user.department}</small></div><button className="icon-button" aria-label="Đăng xuất" onClick={signOut}><LogOut size={16} /></button></div></div>
+      <div className="sidebar-bottom"><div className="health-dot"><i />Hệ thống hoạt động</div><div className="user-card"><div className="avatar">L</div><div className="user-meta"><strong>Nhân viên logistics</strong><small>Không cần đăng nhập</small></div></div></div>
     </aside>
 
     <main className="main-area">
-      <header className="topbar"><div className="breadcrumbs"><span>Logistics</span><ChevronRight size={14} /><strong>{navItems.find((n) => n.id === tab)?.label}</strong></div><div className="topbar-right"><span className="date-chip"><CalendarDays size={15} />{dashboard ? dateLabel(dashboard.scenario.operation_date) : "Đang tải…"}</span><button className="icon-button" aria-label="Làm mới dữ liệu" onClick={() => refresh().catch((e) => setError(e.message))}><RefreshCw size={16} /></button><div className="avatar avatar-sm">{user.name.slice(0,1).toUpperCase()}</div></div></header>
+      <header className="topbar"><div className="breadcrumbs"><span>Logistics</span><ChevronRight size={14} /><strong>{navItems.find((n) => n.id === tab)?.label}</strong></div><div className="topbar-right"><span className="date-chip"><CalendarDays size={15} />{dashboard ? dateLabel(dashboard.scenario.operation_date) : "Đang tải…"}</span><button className="icon-button" aria-label="Làm mới dữ liệu" onClick={() => refresh().catch((e) => setError(e.message))}><RefreshCw size={16} /></button><div className="avatar avatar-sm">L</div></div></header>
       <div className="content-area">
         {dashboard?.synthetic_data && <div className="demo-ribbon"><AlertCircle size={15} /><span><strong>DỮ LIỆU THAM CHIẾU MÔ PHỎNG</strong> · Hồ sơ khách hàng, SKU, địa chỉ, đội xe, báo giá và cước được tạo mẫu; cần thay bằng dữ liệu chủ và chứng từ đã xác thực trước vận hành thực tế.</span></div>}
         {error && <div className="toast toast-error"><AlertCircle size={16}/><span>{error}</span><button onClick={() => setError("")}><X size={14}/></button></div>}
@@ -215,10 +200,6 @@ export function DispatchBoard() {
       </div>
     </main>
   </div>;
-}
-
-function LoginPage({ email,password,setEmail,setPassword,onSubmit,loading,error }: { email:string;password:string;setEmail:(v:string)=>void;setPassword:(v:string)=>void;onSubmit:(e:React.FormEvent)=>void;loading:boolean;error:string }) {
-  return <div className="login-shell"><div className="login-left"><div className="brand brand-light"><div className="brand-mark"><Boxes size={20}/></div><div><strong>fleetmix<span>AI</span></strong><small>HỆ THỐNG VẬN HÀNH LOGISTICS</small></div></div><div className="login-hero"><span className="eyebrow">QUẢN TRỊ VẬN HÀNH VẬN TẢI</span><h1>Điều vận chính xác.<br/><em>Thông tin xuyên suốt.</em></h1><p>Một nơi để nhân viên logistics theo dõi lệnh giao hàng, kiểm tra pallet, lập tuyến và kiểm soát kế hoạch vận tải.</p><div className="login-feature"><span><Route size={17}/></span><div><strong>Lập tuyến theo ràng buộc</strong><small>Tải trọng · thể tích · hạn giao · kích thước thùng</small></div></div><div className="login-feature"><span><Boxes size={17}/></span><div><strong>Quan sát phương tiện và hàng hóa</strong><small>Sơ đồ tuyến, tải xe và bố trí pallet 2D</small></div></div><div className="login-feature"><span><ClipboardCheck size={17}/></span><div><strong>Quy trình kế hoạch</strong><small>Kiểm tra nghiệp vụ, xác nhận và nhật ký thao tác</small></div></div></div><div className="login-footer">FLEETMIX AI · MÔI TRƯỜNG THAM CHIẾU · DỮ LIỆU TỔNG HỢP</div></div><div className="login-right"><form className="login-form" onSubmit={onSubmit}><div className="mobile-brand brand"><div className="brand-mark"><Boxes size={20}/></div><div><strong>fleetmix<span>AI</span></strong><small>HỆ THỐNG VẬN HÀNH LOGISTICS</small></div></div><span className="eyebrow">NHÂN VIÊN PHÒNG LOGISTICS</span><h2>Đăng nhập hệ thống</h2><p>Tất cả nhân viên logistics sử dụng cùng các chức năng nghiệp vụ.</p>{error&&<div className="login-error"><AlertCircle size={15}/>{error}</div>}<label>Email công việc<input type="email" required value={email} onChange={(e)=>setEmail(e.target.value)} autoComplete="username"/></label><label>Mật khẩu<input type="password" required value={password} onChange={(e)=>setPassword(e.target.value)} autoComplete="current-password"/></label><button className="button button-primary login-submit" disabled={loading}>{loading?<LoaderCircle className="spin" size={17}/>:null}Đăng nhập <ArrowRight size={16}/></button><div className="demo-login"><strong>Tài khoản nhân viên tham chiếu</strong><span>minh.anh@anphuc-logistics.example</span><small>Mật khẩu môi trường cục bộ: FleetMixDemo!2026</small></div><div className="login-footnote"><ShieldCheck size={14}/> Danh tính dùng cho đăng nhập và nhật ký; mọi nhân viên logistics dùng chung nghiệp vụ. Hồ sơ hệ thống hiện là dữ liệu mô phỏng, chưa đồng bộ ERP/WMS.</div></form></div></div>;
 }
 
 function Metric({ icon: Icon,label,value,note,tone }: { icon: typeof Truck;label:string;value:string|number;note:string;tone:string }) { return <div className="metric-card"><div className={`metric-icon ${tone}`}><Icon size={18}/></div><div className="metric-copy"><span>{label}</span><strong>{value}</strong><small>{note}</small></div><ArrowDownRight size={15} className="metric-corner"/></div>; }
@@ -271,10 +252,9 @@ function ApprovalPage({plan,onApprove,onBooking,busy,onRouteState}:{plan:Plan|nu
   return <><div className="page-heading"><div><span className="eyebrow">KIỂM SOÁT KẾ HOẠCH · NHẬT KÝ NGHIỆP VỤ</span><h1>Kế hoạch vận tải</h1><p>Rà soát phương án, ghi nhận trạng thái tuyến và quyết định vận hành.</p></div>{plan&&<span className={`table-status ${plan.plan_status.toLowerCase()}`}>{statusLabel(plan.plan_status)}</span>}</div>{!plan?<section className="panel"><Empty icon={ClipboardCheck} title="Chưa có kế hoạch" detail="Lập phương án vận tải trước khi xác nhận nghiệp vụ."/></section>:<><section className="approval-summary"><div><span>PHƯƠNG ÁN HIỆN TẠI</span><strong>{plan.plan_id.slice(0,8).toUpperCase()}</strong><small>{plan.summary.assigned}/{plan.summary.orders_total} đơn đã xếp · {plan.summary.vehicles_used} tuyến</small></div><div><span>CHI PHÍ ƯỚC TÍNH</span><strong>{money(plan.summary.cost_vnd)}</strong><small>{compact(plan.summary.distance_km)} km tổng tuyến</small></div><div><span>ĐƠN CHƯA XẾP</span><strong>{plan.summary.unassigned}</strong><small>Rà soát nguyên nhân trước duyệt</small></div><div><span>NGUỒN DỮ LIỆU</span><strong>{plan.synthetic_data?"MÔ PHỎNG":"VẬN HÀNH"}</strong><small>Bộ lập tuyến: chèn lệnh theo chi phí tăng dần (heuristic)</small></div></section><section className="panel table-panel"><div className="panel-heading"><div><h2>Danh sách tuyến</h2><p>Đưa tuyến vào trạng thái đang chạy để khóa khi tái lập phương án.</p></div><Route size={20}/></div><div className="approval-routes">{plan.routes.map((r)=> <div key={r.route_key} className="approval-route"><div className="route-icon route-vehicle"><Truck size={16}/></div><div className="approval-route-main"><strong>{r.kind==="CARRIER"?r.carrier_name:r.vehicle_id} · {r.kind==="CARRIER"?"Xe thuê ngoài":"Xe nội bộ"}</strong><small>{r.stops.map(s=>s.external_id).join(" → ")}</small><small>{r.load.weight_kg} kg / {compact(r.load.volume_m3)} m³ · kiểm tra pallet: {statusLabel(r.load.packing.status)}</small></div><div className="approval-route-cost"><span>{money(r.cost_vnd)}</span><span className={`route-state state-${r.state.toLowerCase()}`}>{statusLabel(r.state)}</span></div><div className="approval-route-actions">{r.state==="PLANNED"&&<button className="button button-quiet button-small" onClick={()=>onRouteState(r,"ACTIVE")} disabled={busy===`route-${r.route_key}`}>Bắt đầu tuyến</button>}{r.state==="ACTIVE"&&<button className="button button-quiet button-small" onClick={()=>onRouteState(r,"COMPLETED")} disabled={busy===`route-${r.route_key}`}>Hoàn tất</button>}</div></div>)}</div></section>{plan.unassigned.length>0&&<section className="panel unassigned-panel"><h2><AlertCircle size={17}/> Đơn chưa xếp tuyến</h2>{plan.unassigned.map((u)=><div key={u.order_id}><strong>{u.order_id}</strong><span>{u.reason.replaceAll("_"," ")}</span></div>)}</section>}<div className="plan-action-bar"><div><div className="approval-status"><span className={`status-dot ${plan.plan_status.toLowerCase()}`}/>{statusLabel(plan.plan_status)}</div><p>Ghi nhận xác nhận nghiệp vụ và giữ nhật ký người thao tác.</p></div><div className="heading-actions">{plan.plan_status==="DRAFT"&&<><button className="button button-quiet" onClick={()=>onApprove("REJECT")} disabled={busy==="approval"}>Trả lại để điều chỉnh</button><button className="button button-primary" onClick={()=>onApprove("APPROVE")} disabled={busy==="approval"}><ShieldCheck size={15}/> Xác nhận kế hoạch</button></>}{plan.plan_status==="APPROVED"&&<button className="button button-primary" onClick={onBooking} disabled={busy==="booking"}><ClipboardCheck size={15}/> Tạo bản nháp yêu cầu xe</button>}</div></div></>}</>;
 }
 
-function TeamPage({employees,form,setForm,onSubmit,busy}:{employees:Employee[];form:{employee_code:string;name:string;email:string;position:string;password:string};setForm:(f:{employee_code:string;name:string;email:string;position:string;password:string})=>void;onSubmit:(e:React.FormEvent)=>void;busy:string}) {
-  return <><div className="page-heading"><div><span className="eyebrow">DANH MỤC NHÂN SỰ · NHẬT KÝ THAO TÁC</span><h1>Nhân viên logistics</h1><p>Danh bạ nhân sự và thông tin người thực hiện giao dịch nghiệp vụ.</p></div><span className="module-chip"><Users size={15}/>{employees.length} nhân viên</span></div><div className="team-layout"><section className="panel table-panel"><div className="panel-heading"><div><h2>Danh bạ phòng logistics</h2><p>Tất cả nhân viên logistics sử dụng cùng các chức năng nghiệp vụ.</p></div><UserRound size={20}/></div><div className="table-wrap"><table><thead><tr><th>MÃ NHÂN VIÊN</th><th>HỌ TÊN</th><th>CHỨC DANH</th><th>EMAIL CÔNG VIỆC</th><th>PHÒNG BAN</th><th>TRẠNG THÁI</th></tr></thead><tbody>{employees.map((e)=><tr key={e.id}><td><strong>{e.employee_code||"—"}</strong></td><td>{e.name}</td><td>{e.position||"Nhân viên logistics"}</td><td>{e.email}</td><td>{e.department}</td><td><span className="table-status ready">ĐANG LÀM VIỆC</span></td></tr>)}</tbody></table></div></section><section className="panel employee-form-panel"><div className="panel-heading"><div><h2>Thêm hồ sơ nhân viên</h2><p>Tạo thông tin đăng nhập cho nhân viên mới.</p></div><Plus size={19}/></div><form onSubmit={onSubmit}><label>Mã nhân viên<input required value={form.employee_code} onChange={e=>setForm({...form,employee_code:e.target.value})} placeholder="EMP-LOG-0005"/></label><label>Họ và tên<input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Nguyễn Văn A"/></label><label>Email công việc<input type="email" required value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="ten@doanhnghiep.vn"/></label><label>Chức danh<input value={form.position} onChange={e=>setForm({...form,position:e.target.value})}/></label><label>Mật khẩu ban đầu<input type="password" minLength={12} required value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Tối thiểu 12 ký tự"/></label><div className="employee-note"><Users size={14}/> Nhân viên dùng chung nghiệp vụ; nhật ký lưu tài khoản và người thao tác để truy vết.</div><button className="button button-primary" disabled={busy==="employee"}>{busy==="employee"?<LoaderCircle className="spin" size={15}/>:<Plus size={15}/>} Tạo hồ sơ nhân viên</button></form></section></div></>;
+function TeamPage({employees,form,setForm,onSubmit,busy}:{employees:Employee[];form:{employee_code:string;name:string;email:string;position:string};setForm:(f:{employee_code:string;name:string;email:string;position:string})=>void;onSubmit:(e:React.FormEvent)=>void;busy:string}) {
+  return <><div className="page-heading"><div><span className="eyebrow">DANH MỤC NHÂN SỰ</span><h1>Nhân viên logistics</h1><p>Danh bạ nhân sự của bộ phận logistics.</p></div><span className="module-chip"><Users size={15}/>{employees.length} nhân viên</span></div><div className="team-layout"><section className="panel table-panel"><div className="panel-heading"><div><h2>Danh bạ phòng logistics</h2><p>Thông tin liên hệ và chức danh nhân viên.</p></div><UserRound size={20}/></div><div className="table-wrap"><table><thead><tr><th>MÃ NHÂN VIÊN</th><th>HỌ TÊN</th><th>CHỨC DANH</th><th>EMAIL CÔNG VIỆC</th><th>PHÒNG BAN</th><th>TRẠNG THÁI</th></tr></thead><tbody>{employees.map((e)=><tr key={e.id}><td><strong>{e.employee_code||"—"}</strong></td><td>{e.name}</td><td>{e.position||"Nhân viên logistics"}</td><td>{e.email}</td><td>{e.department}</td><td><span className="table-status ready">ĐANG LÀM VIỆC</span></td></tr>)}</tbody></table></div></section><section className="panel employee-form-panel"><div className="panel-heading"><div><h2>Thêm hồ sơ nhân viên</h2><p>Thêm thông tin vào danh bạ phòng logistics.</p></div><Plus size={19}/></div><form onSubmit={onSubmit}><label>Mã nhân viên<input required value={form.employee_code} onChange={e=>setForm({...form,employee_code:e.target.value})} placeholder="EMP-LOG-0005"/></label><label>Họ và tên<input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Nguyễn Văn A"/></label><label>Email công việc<input type="email" required value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="ten@doanhnghiep.vn"/></label><label>Chức danh<input value={form.position} onChange={e=>setForm({...form,position:e.target.value})}/></label><div className="employee-note"><Users size={14}/> Hệ thống dùng chung cho nhân viên logistics; không cần tài khoản đăng nhập.</div><button className="button button-primary" disabled={busy==="employee"}>{busy==="employee"?<LoaderCircle className="spin" size={15}/>:<Plus size={15}/>} Thêm nhân viên</button></form></section></div></>;
 }
-
 function AuditTable({events}:{events:Audit[]}) {
-  return <section className="panel audit-panel"><div className="panel-heading"><div><h2>Nhật ký hoạt động</h2><p>Lưu tài khoản nhân viên, thời điểm và loại thao tác để truy vết.</p></div><Activity size={19}/></div><div className="table-wrap"><table><thead><tr><th>THỜI ĐIỂM</th><th>NHÂN VIÊN</th><th>HÀNH ĐỘNG</th><th>ĐỐI TƯỢNG</th></tr></thead><tbody>{events.map((event)=><tr key={event.id}><td>{new Date(`${event.created_at}Z`).toLocaleString("vi-VN")}</td><td>{String(event.details.actor_name ?? event.details.employee_code ?? "Nhân viên")}</td><td><strong>{event.action}</strong></td><td>{event.entity_type} · {event.entity_id.slice(0,24)}</td></tr>)}{events.length===0&&<tr><td colSpan={4}>Chưa có hoạt động được ghi nhận.</td></tr>}</tbody></table></div></section>;
+  return <section className="panel audit-panel"><div className="panel-heading"><div><h2>Nhật ký hoạt động</h2><p>Lưu thời điểm, người thao tác chung, loại thao tác và đối tượng để truy vết.</p></div><Activity size={19}/></div><div className="table-wrap"><table><thead><tr><th>THỜI ĐIỂM</th><th>NGƯỜI THAO TÁC</th><th>HÀNH ĐỘNG</th><th>ĐỐI TƯỢNG</th></tr></thead><tbody>{events.map((event)=><tr key={event.id}><td>{new Date(`${event.created_at}Z`).toLocaleString("vi-VN")}</td><td>{String(event.details.actor_name ?? event.details.employee_code ?? "Nhân viên")}</td><td><strong>{event.action}</strong></td><td>{event.entity_type} · {event.entity_id.slice(0,24)}</td></tr>)}{events.length===0&&<tr><td colSpan={4}>Chưa có hoạt động được ghi nhận.</td></tr>}</tbody></table></div></section>;
 }

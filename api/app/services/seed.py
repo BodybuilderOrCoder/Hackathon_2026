@@ -3,15 +3,16 @@ from datetime import datetime, time
 from pathlib import Path
 
 from openpyxl import load_workbook
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..models import (Availability, Carrier, CarrierQuote, Customer, DistanceMatrix, FleetVehicle, Location,
                       Order, Organization, Pallet, Product, Scenario, User, VehicleClass)
-from ..security import hash_password
-
 ORG_ID = "ORG-AP-001"
+SHARED_ACTOR_ID = "USR-LOG-SHARED"
+SHARED_ACTOR_EMAIL = "shared-operations@fleetmix.invalid"
+SHARED_ACTOR_CODE = "LOG-OPS"
 
 
 def _rows(book, name):
@@ -43,7 +44,7 @@ def load_workbook_rows(path: Path) -> dict[str, list[dict]]:
     return result
 
 
-def seed_database(db: Session, password: str | None = None, path: Path | None = None) -> None:
+def seed_database(db: Session, path: Path | None = None) -> None:
     if db.scalar(select(Scenario).limit(1)): return
     settings = get_settings()
     rows = load_workbook_rows(path or settings.seed_path)
@@ -146,7 +147,6 @@ def seed_database(db: Session, password: str | None = None, path: Path | None = 
                               from_location_id=row["from_location_id"], to_location_id=row["to_location_id"],
                               distance_km=float(row["distance_km"]), drive_time_min=int(row["drive_time_min"]),
                               source=str(row["source"]), matrix_version=str(row["matrix_version"]), is_synthetic=True))
-    demo_password = password or settings.fleetmix_demo_password
     employee_rows = rows["employees"] or [
         {"user_id": "USR-LOG-0001", "full_name": "Nguyễn Thị Minh Anh", "email": "minh.anh@anphuc-logistics.example", "employee_code": "EMP-LOG-0001", "position": "Chuyên viên điều vận"},
         {"user_id": "USR-LOG-0002", "full_name": "Trần Quốc Bảo", "email": "quoc.bao@anphuc-logistics.example", "employee_code": "EMP-LOG-0002", "position": "Chuyên viên kế hoạch vận tải"},
@@ -157,6 +157,29 @@ def seed_database(db: Session, password: str | None = None, path: Path | None = 
         db.add(User(id=row["user_id"], organization_id=organization_id, full_name=row["full_name"],
                     employee_code=row["employee_code"], position=row.get("position") or "Nhân viên logistics",
                     department=str(row.get("department") or "LOGISTICS"), phone=str(row.get("phone") or ""),
-                    email=row["email"], role="LOGISTICS_STAFF", password_hash=hash_password(demo_password),
+                    email=row["email"], role="LOGISTICS_STAFF", password_hash="",
                     active=bool(row.get("active", True))))
+    db.add(User(id=SHARED_ACTOR_ID, organization_id=organization_id, full_name="Nhân viên logistics",
+                employee_code=SHARED_ACTOR_CODE, department="LOGISTICS", position="Điều hành dùng chung",
+                phone="", email=SHARED_ACTOR_EMAIL, role="SYSTEM_ACTOR", password_hash="", active=True))
     db.commit()
+
+
+def ensure_shared_actor(db: Session) -> User:
+    actor = db.get(User, SHARED_ACTOR_ID)
+    if actor is None:
+        actor = User(id=SHARED_ACTOR_ID, organization_id=ORG_ID, full_name="Nhân viên logistics",
+                     employee_code=SHARED_ACTOR_CODE, department="LOGISTICS", position="Điều hành dùng chung",
+                     phone="", email=SHARED_ACTOR_EMAIL, role="SYSTEM_ACTOR", password_hash="", active=True)
+        db.add(actor)
+    else:
+        actor.full_name = "Nhân viên logistics"
+        actor.employee_code = SHARED_ACTOR_CODE
+        actor.department = "LOGISTICS"
+        actor.position = "Điều hành dùng chung"
+        actor.role = "SYSTEM_ACTOR"
+        actor.password_hash = ""
+        actor.active = True
+    db.execute(update(User).where(User.password_hash != "").values(password_hash=""))
+    db.commit()
+    return actor

@@ -32,7 +32,8 @@ class User(Base):
     position: Mapped[str] = mapped_column(String(120), default="", nullable=False)
     phone: Mapped[str] = mapped_column(String(40), default="", nullable=False)
     role: Mapped[str] = mapped_column(String(32), index=True)
-    password_hash: Mapped[str] = mapped_column(String(256))
+    # Kept for compatibility with existing SQLite files; login is disabled and values stay blank.
+    password_hash: Mapped[str] = mapped_column(String(256), default="", nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc)
 

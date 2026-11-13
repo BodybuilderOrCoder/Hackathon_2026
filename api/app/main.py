@@ -14,9 +14,8 @@ from .config import get_settings
 from .db import SessionLocal, get_db, init_db
 from .models import (Approval, AuditEvent, Availability, BookingDraft, Carrier, CarrierQuote, Customer, DistanceMatrix,
                      FleetVehicle, Location, OptimizationRun, Order, Organization, Pallet, Plan, Product, Scenario, User, VehicleClass)
-from .schemas import ApprovalRequest, AssignRequest, LoginRequest, OptimizeRequest
-from .security import current_user, issue_token, verify_password
-from .services.seed import ORG_ID, load_workbook_rows, seed_database
+from .schemas import ApprovalRequest, AssignRequest, OptimizeRequest
+from .services.seed import ORG_ID, SHARED_ACTOR_ID, ensure_shared_actor, load_workbook_rows, seed_database
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -24,6 +23,7 @@ async def lifespan(_app):
     with SessionLocal() as db:
         if not db.scalar(select(Scenario).limit(1)):
             seed_database(db)
+        ensure_shared_actor(db)
     yield
 
 
@@ -36,50 +36,38 @@ def audit(db, user, action, entity_type, entity_id, details=None):
                       entity_id=str(entity_id), details_json=json.dumps(details, ensure_ascii=False)))
 
 
+def shared_actor(db: Session = Depends(get_db)) -> User:
+    actor = db.get(User, SHARED_ACTOR_ID)
+    if actor is None:
+        raise HTTPException(status_code=503, detail="Shared logistics operator is not initialized")
+    return actor
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "fleetmix-api", "environment": get_settings().app_env}
 
 
-@app.post("/api/auth/login")
-def login(body: LoginRequest, db: Session = Depends(get_db)):
-    user = db.scalar(select(User).where(func.lower(User.email) == body.email.strip().lower(), User.active.is_(True)))
-    if not user or not verify_password(body.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Email or password is incorrect")
-    audit(db,user,"AUTH_LOGIN","User",user.id,{})
-    db.commit()
-    return {"access_token": issue_token(user), "token_type": "bearer", "user": _user(user)}
-
-
-@app.get("/api/auth/me")
-def me(user: User = Depends(current_user)):
-    return _user(user)
-
-
-def _user(user): return {"id": user.id, "name": user.full_name, "email": user.email, "employee_code": user.employee_code,
-                        "department": user.department, "position": user.position}
-
-
 @app.get("/api/employees")
-def employees(db: Session=Depends(get_db),user: User=Depends(current_user)):
-    rows=db.scalars(select(User).where(User.organization_id==user.organization_id).order_by(User.employee_code)).all()
+def employees(db: Session=Depends(get_db),user: User=Depends(shared_actor)):
+    rows=db.scalars(select(User).where(User.organization_id==user.organization_id, User.role=="LOGISTICS_STAFF").order_by(User.employee_code)).all()
     return {"employees":[{"id":x.id,"employee_code":x.employee_code,"name":x.full_name,"email":x.email,"department":x.department,
         "position":x.position,"active":x.active} for x in rows]}
 
 
 @app.post("/api/employees")
-def create_employee(body: dict, db: Session=Depends(get_db), user: User=Depends(current_user)):
-    name=str(body.get("name", "")).strip(); email=str(body.get("email", "")).strip().lower(); password=str(body.get("password", ""))
+def create_employee(body: dict, db: Session=Depends(get_db), user: User=Depends(shared_actor)):
+    name=str(body.get("name", "")).strip(); email=str(body.get("email", "")).strip().lower()
     code=str(body.get("employee_code", "")).strip()
-    if len(name)<2 or "@" not in email or len(password)<12 or not code:
-        raise HTTPException(422,"Enter employee code, name, email and a password of at least 12 characters")
+    if len(name)<2 or "@" not in email or not code:
+        raise HTTPException(422,"Enter a valid employee code, name and work email")
     if db.scalar(select(User).where(func.lower(User.email)==email)) or db.scalar(select(User).where(User.organization_id==user.organization_id,User.employee_code==code)):
         raise HTTPException(409,"Email or employee code already exists")
-    from .security import hash_password
     member=User(id=str(uuid.uuid4()),organization_id=user.organization_id,full_name=name,email=email,employee_code=code,
-        department="LOGISTICS",position=str(body.get("position", "Logistics staff")),role="LOGISTICS_STAFF",password_hash=hash_password(password),active=True)
-    db.add(member);audit(db,user,"EMPLOYEE_CREATED","User",member.id,{"employee_code":code});db.commit()
-    return {"employee":_user(member)}
+        department="LOGISTICS",position=str(body.get("position", "Logistics staff")),role="LOGISTICS_STAFF",password_hash="",active=True)
+    db.add(member);audit(db,user,"EMPLOYEE_CREATED","Employee",member.id,{"employee_code":code});db.commit()
+    return {"employee":{"id":member.id,"employee_code":member.employee_code,"name":member.full_name,"email":member.email,
+        "department":member.department,"position":member.position,"active":member.active}}
 
 
 def _scenario(db, user):
@@ -89,7 +77,7 @@ def _scenario(db, user):
 
 
 @app.get("/api/dashboard")
-def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user)):
+def dashboard(db: Session = Depends(get_db), user: User = Depends(shared_actor)):
     scenario = _scenario(db, user)
     organization = db.get(Organization, user.organization_id)
     depot = db.get(Location, scenario.depot_id)
@@ -114,7 +102,7 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
 
 
 @app.get("/api/orders")
-def list_orders(db: Session = Depends(get_db), user: User = Depends(current_user)):
+def list_orders(db: Session = Depends(get_db), user: User = Depends(shared_actor)):
     scenario = _scenario(db, user)
     orders = db.scalars(select(Order).where(Order.organization_id == user.organization_id, Order.scenario_id == scenario.id).order_by(Order.due_at)).all()
     customers = {x.id: x for x in db.scalars(select(Customer).where(Customer.organization_id == user.organization_id)).all()}
@@ -140,7 +128,7 @@ def list_orders(db: Session = Depends(get_db), user: User = Depends(current_user
 
 
 @app.get("/api/customers")
-def customers_list(db: Session = Depends(get_db), user: User = Depends(current_user)):
+def customers_list(db: Session = Depends(get_db), user: User = Depends(shared_actor)):
     rows = db.scalars(select(Customer).where(Customer.organization_id == user.organization_id).order_by(Customer.id)).all()
     return {"customers": [{"id": x.id, "legal_name": x.legal_name, "display_name": x.display_name,
         "customer_segment": x.customer_segment, "sales_channel": x.sales_channel, "payment_terms": x.payment_terms,
@@ -148,7 +136,7 @@ def customers_list(db: Session = Depends(get_db), user: User = Depends(current_u
 
 
 @app.get("/api/products")
-def products_list(db: Session = Depends(get_db), user: User = Depends(current_user)):
+def products_list(db: Session = Depends(get_db), user: User = Depends(shared_actor)):
     rows = db.scalars(select(Product).where(Product.organization_id == user.organization_id).order_by(Product.id)).all()
     return {"products": [{"id": x.id, "name": x.name, "category": x.category, "base_uom": x.base_uom,
         "handling_code": x.handling_code, "stackable_default": x.stackable_default, "rotation_rule": x.rotation_rule,
@@ -156,7 +144,7 @@ def products_list(db: Session = Depends(get_db), user: User = Depends(current_us
 
 
 @app.get("/api/fleet")
-def fleet(db: Session = Depends(get_db), user: User = Depends(current_user)):
+def fleet(db: Session = Depends(get_db), user: User = Depends(shared_actor)):
     scenario = _scenario(db, user)
     vehicles = db.scalars(select(FleetVehicle).where(FleetVehicle.organization_id == user.organization_id, FleetVehicle.scenario_id == scenario.id)).all()
     result = []
@@ -172,7 +160,7 @@ def fleet(db: Session = Depends(get_db), user: User = Depends(current_user)):
 
 
 @app.get("/api/quotes")
-def quotes(db: Session = Depends(get_db), user: User = Depends(current_user)):
+def quotes(db: Session = Depends(get_db), user: User = Depends(shared_actor)):
     scenario = _scenario(db, user)
     av = db.scalars(select(Availability).where(Availability.organization_id == user.organization_id, Availability.scenario_id == scenario.id)).all()
     carr = {c.id:c.name for c in db.scalars(select(Carrier).where(Carrier.organization_id == user.organization_id)).all()}
@@ -186,7 +174,7 @@ def quotes(db: Session = Depends(get_db), user: User = Depends(current_user)):
 
 
 @app.post("/api/optimization-runs", status_code=202)
-def create_optimization(body: OptimizeRequest, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def create_optimization(body: OptimizeRequest, db: Session = Depends(get_db), user: User = Depends(shared_actor)):
     scenario = _scenario(db, user); rid = str(uuid.uuid4())
     config = body.model_dump()
     prior = db.scalar(select(Plan).where(Plan.organization_id == user.organization_id, Plan.scenario_id == scenario.id).order_by(Plan.created_at.desc()))
@@ -200,7 +188,7 @@ def create_optimization(body: OptimizeRequest, db: Session = Depends(get_db), us
 
 
 @app.get("/api/optimization-runs/{run_id}")
-def optimization_status(run_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def optimization_status(run_id: str, db: Session = Depends(get_db), user: User = Depends(shared_actor)):
     job = db.scalar(select(OptimizationRun).where(OptimizationRun.id == run_id, OptimizationRun.organization_id == user.organization_id))
     if not job: raise HTTPException(404, "Optimization run not found")
     return {"id":job.id,"status":job.status,"progress":job.progress,"error":job.error_message,
@@ -208,7 +196,7 @@ def optimization_status(run_id: str, db: Session = Depends(get_db), user: User =
 
 
 @app.get("/api/plans/latest")
-def latest_plan(db: Session = Depends(get_db), user: User = Depends(current_user)):
+def latest_plan(db: Session = Depends(get_db), user: User = Depends(shared_actor)):
     p = db.scalar(select(Plan).where(Plan.organization_id == user.organization_id).order_by(Plan.created_at.desc()))
     if not p: return {"plan":None}
     data=json.loads(p.result_json); data.update({"plan_id":p.id,"plan_status":p.status,"version":p.version,"objective":p.objective})
@@ -216,7 +204,7 @@ def latest_plan(db: Session = Depends(get_db), user: User = Depends(current_user
 
 
 @app.post("/api/plans/{plan_id}/approval")
-def approve_plan(plan_id: str, body: ApprovalRequest, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def approve_plan(plan_id: str, body: ApprovalRequest, db: Session = Depends(get_db), user: User = Depends(shared_actor)):
     p=db.scalar(select(Plan).where(Plan.id==plan_id,Plan.organization_id==user.organization_id))
     if not p: raise HTTPException(404,"Plan not found")
     if p.status != "DRAFT": raise HTTPException(409,"Only draft plans can be approved or rejected")
@@ -227,7 +215,7 @@ def approve_plan(plan_id: str, body: ApprovalRequest, db: Session = Depends(get_
 
 
 @app.patch("/api/plans/{plan_id}/routes/{route_key}/state")
-def set_route_state(plan_id: str, route_key: str, body: dict, db: Session=Depends(get_db), user: User=Depends(current_user)):
+def set_route_state(plan_id: str, route_key: str, body: dict, db: Session=Depends(get_db), user: User=Depends(shared_actor)):
     state=str(body.get("state", "")).upper()
     if state not in {"ACTIVE","COMPLETED"}: raise HTTPException(422,"Route state must be ACTIVE or COMPLETED")
     p=db.scalar(select(Plan).where(Plan.id==plan_id,Plan.organization_id==user.organization_id))
@@ -241,7 +229,7 @@ def set_route_state(plan_id: str, route_key: str, body: dict, db: Session=Depend
 
 
 @app.post("/api/plans/{plan_id}/booking-drafts")
-def create_booking_drafts(plan_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def create_booking_drafts(plan_id: str, db: Session = Depends(get_db), user: User = Depends(shared_actor)):
     p=db.scalar(select(Plan).where(Plan.id==plan_id,Plan.organization_id==user.organization_id))
     if not p: raise HTTPException(404,"Plan not found")
     if p.status != "APPROVED": raise HTTPException(409,"The plan must be confirmed before preparing booking drafts")
@@ -259,7 +247,7 @@ def create_booking_drafts(plan_id: str, db: Session = Depends(get_db), user: Use
 
 
 @app.post("/api/plans/{plan_id}/assign")
-def manual_assign(plan_id: str, body: AssignRequest, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def manual_assign(plan_id: str, body: AssignRequest, db: Session = Depends(get_db), user: User = Depends(shared_actor)):
     p=db.scalar(select(Plan).where(Plan.id==plan_id,Plan.organization_id==user.organization_id))
     if not p or p.status != "DRAFT": raise HTTPException(409,"A draft plan is required")
     data=json.loads(p.result_json); route=next((r for r in data.get("routes",[]) if r["route_key"]==body.route_key),None)
@@ -397,7 +385,7 @@ def _validate_import_rows(rows):
 
 
 @app.post("/api/imports/preview")
-async def import_preview(file: UploadFile = File(...), user: User = Depends(current_user)):
+async def import_preview(file: UploadFile = File(...), user: User = Depends(shared_actor)):
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")): raise HTTPException(415,"Upload an .xlsx workbook")
     payload=await file.read()
     if len(payload)>15*1024*1024: raise HTTPException(413,"Workbook must be 15 MB or smaller")
@@ -414,7 +402,7 @@ async def import_preview(file: UploadFile = File(...), user: User = Depends(curr
 
 
 @app.post("/api/imports/commit")
-async def import_commit(file: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(current_user)):
+async def import_commit(file: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(shared_actor)):
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")): raise HTTPException(415,"Upload an .xlsx workbook")
     payload=await file.read()
     if len(payload)>15*1024*1024: raise HTTPException(413,"Workbook must be 15 MB or smaller")
@@ -485,13 +473,13 @@ async def import_commit(file: UploadFile = File(...), db: Session = Depends(get_
 
 
 @app.get("/api/audit")
-def audit_log(db: Session=Depends(get_db),user: User=Depends(current_user)):
+def audit_log(db: Session=Depends(get_db),user: User=Depends(shared_actor)):
     rows=db.scalars(select(AuditEvent).where(AuditEvent.organization_id==user.organization_id).order_by(AuditEvent.created_at.desc()).limit(100)).all()
     return {"events":[{"id":x.id,"action":x.action,"entity_type":x.entity_type,"entity_id":x.entity_id,"details":json.loads(x.details_json),"created_at":x.created_at.isoformat()} for x in rows]}
 
 
 @app.post("/api/ai/quote-extract")
-def quote_extract(body: dict, db: Session=Depends(get_db), user: User=Depends(current_user)):
+def quote_extract(body: dict, db: Session=Depends(get_db), user: User=Depends(shared_actor)):
     text=str(body.get("text", ""))[:10000]
     if len(text.strip())<3: raise HTTPException(422,"Quote text is required")
     def num(pattern, scale=1):

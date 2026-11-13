@@ -1,6 +1,6 @@
 # FleetMix AI Logistics Operations
 
-FleetMix is an internal logistics operations MVP for dispatch staff. It covers the daily transport planning flow from order and pallet intake through fleet assignment, route review, human confirmation, carrier request drafts and an employee audit trail. All signed-in logistics employees share the same functional access, as requested; the employee directory records who performed each operation.
+FleetMix is an internal logistics operations MVP for dispatch staff. It covers the daily transport planning flow from order and pallet intake through fleet assignment, route review, human confirmation, carrier request drafts and an operational audit trail. The system opens directly into dispatch; it has no login or role permissions. Audit entries use a shared logistics operator identity rather than identifying a specific employee.
 
 ## Included modules
 
@@ -10,7 +10,7 @@ FleetMix is an internal logistics operations MVP for dispatch staff. It covers t
 - Deterministic cheapest-insertion route planner with cost estimation. It returns a feasible heuristic result and does not claim a global optimum.
 - Carrier quote and confirmed-availability catalog; pending capacity is excluded from planning.
 - Separate plan confirmation, route start/completion states, replanning that preserves started/completed routes, and local carrier booking drafts after confirmation.
-- Logistics employee directory, shared employee login, audit history, and a quote text extraction assistant.
+- Logistics employee directory, shared operational audit history, and a quote text extraction assistant.
 - AI Gateway structured extraction is optional. Without `AI_GATEWAY_API_KEY` and `FLEETMIX_AI_MODEL`, a local rule parser is used. Extracted quote fields always require human review.
 
 ## Run locally on Windows
@@ -32,17 +32,9 @@ The SQLAlchemy source install disables optional C extensions to run on this Wind
 
 Open <http://127.0.0.1:3000>. The local API is at <http://127.0.0.1:8000/docs>.
 
-## Tài khoản nhân viên tham chiếu
+## Access model
 
-Workbook seed tạo bốn tài khoản nhân viên logistics mẫu. Mọi nhân viên dùng cùng chức năng; tài khoản chỉ phục vụ đăng nhập và lưu dấu vết giao dịch:
-
-- `minh.anh@anphuc-logistics.example`
-- `quoc.bao@anphuc-logistics.example`
-- `hoang.phuc@anphuc-logistics.example`
-- `ngoc.han@anphuc-logistics.example`
-- Mật khẩu cục bộ ban đầu: `FleetMixDemo!2026`
-
-Set `FLEETMIX_DEMO_PASSWORD` in the untracked project-root `.env` to change the local seed password. The production startup guard rejects the default signing key or demo password.
+FleetMix opens directly into the operations workspace without sign-in or role permissions. Anyone who can reach the running application can use its logistics functions. The employee directory is reference data; audit history records a shared logistics operator, not an individually authenticated person.
 
 Optional API settings are in the project-root `.env.example`. Optional web settings belong in `web/.env.local`; copy `web/.env.example` there to configure the API URL or AI Gateway model. Do not commit either local environment file.
 

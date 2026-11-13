@@ -24,7 +24,7 @@ def db_session():
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     db = factory()
-    seed_database(db, password="TestOnlyPassword!2026", path=WORKBOOK)
+    seed_database(db, path=WORKBOOK)
     yield db
     db.close(); Base.metadata.drop_all(engine); engine.dispose()
 

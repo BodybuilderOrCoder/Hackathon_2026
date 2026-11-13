@@ -1,11 +1,6 @@
 from pydantic import BaseModel, Field
 
 
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-
 class OptimizeRequest(BaseModel):
     objective: str = "BALANCED"
     include_carriers: bool = True
