@@ -45,6 +45,7 @@ def test_quote_extraction_is_review_only(client):
     assert data["needs_human_review"] is True
     assert data["fields"]["rate_per_km_vnd"]==15500
     assert data["fields"]["minimum_fare_vnd"]==360000
+    assert data["fields"]["vat_rate_assumption"]==0.1
 
 
 def test_manual_assignment_refuses_a_missed_time_window(client,db_session):
@@ -82,7 +83,7 @@ def test_manual_assignment_refuses_a_missed_time_window(client,db_session):
     db_session.commit()
     response=client.post(f"/api/plans/{plan_id}/assign",json={"order_id":order.id,"route_key":route_key})
     assert response.status_code==422
-    assert "time window" in response.json()["detail"]
+    assert response.json()["detail"]["code"]=="TIME_WINDOW"
 
 
 def test_replan_preserves_started_routes(client,db_session):
@@ -90,6 +91,11 @@ def test_replan_preserves_started_routes(client,db_session):
     first=optimize(db_session,queued.json()["id"],ORG_ID,SHARED_ACTOR_ID,{"objective":"BALANCED","include_carriers":False,"time_limit_seconds":2})
     assert first["routes"]
     route=first["routes"][0]
+    premature=client.patch(f"/api/plans/{first['plan_id']}/routes/{route['route_key']}/state",json={"state":"ACTIVE"})
+    assert premature.status_code==409
+    assert client.post(f"/api/plans/{first['plan_id']}/approval",json={"decision":"APPROVE"}).status_code==200
+    skipped=client.patch(f"/api/plans/{first['plan_id']}/routes/{route['route_key']}/state",json={"state":"COMPLETED"})
+    assert skipped.status_code==409
     locked=client.patch(f"/api/plans/{first['plan_id']}/routes/{route['route_key']}/state",json={"state":"ACTIVE"})
     assert locked.status_code==200
     next_job=client.post("/api/optimization-runs",json={"objective":"BALANCED","include_carriers":False,"time_limit_seconds":2})
@@ -129,6 +135,54 @@ def test_import_rejects_order_totals_that_do_not_match_pallets(client):
     upload=("bad-totals.xlsx",payload,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     preview=client.post("/api/imports/preview",files={"file":upload})
     assert preview.status_code==200 and preview.json()["valid"] is False
-    assert any("weight does not match" in error for error in preview.json()["errors"])
+    assert any("khối lượng lệnh không khớp" in error for error in preview.json()["errors"])
     commit=client.post("/api/imports/commit",files={"file":upload})
     assert commit.status_code==422
+
+
+def test_plan_respects_ready_time_receiving_hours_and_reuses_internal_fleet(client,db_session):
+    from app.models import Location, Scenario
+    from app.services.optimizer import clock_min
+    queued=client.post("/api/optimization-runs",json={"objective":"BALANCED","include_carriers":True,"time_limit_seconds":2})
+    result=optimize(db_session,queued.json()["id"],ORG_ID,SHARED_ACTOR_ID,{"objective":"BALANCED","include_carriers":True})
+    orders={o.id:o for o in db_session.scalars(select(Order)).all()}
+    locations={x.id:x for x in db_session.scalars(select(Location)).all()}
+    for route in result["routes"]:
+        departure=clock_min(route["departure"])
+        assert departure>=max(clock_min(orders[s["order_id"]].ready_at) for s in route["stops"])
+        for stop in route["stops"]:
+            loc=locations[stop["location_id"]]; eta=clock_min(stop["eta"])
+            assert clock_min(loc.open_from)<=eta<=min(clock_min(loc.open_until),clock_min(orders[stop["order_id"]].due_at))
+    by_vehicle={}
+    for route in result["routes"]:
+        by_vehicle.setdefault(route["vehicle_id"],[]).append(route)
+    for trips in by_vehicle.values():
+        trips.sort(key=lambda r:r["trip_no"])
+        for before,after in zip(trips,trips[1:]):
+            assert clock_min(after["departure"])>=clock_min(before["return_at"])
+    assert any(len(trips)>1 for trips in by_vehicle.values() if trips[0]["kind"]=="INTERNAL")
+    assert result["summary"]["assigned"]+result["summary"]["unassigned"]==24
+
+
+def test_round_trip_tariff_bills_return_leg_once():
+    from app.services.pricing import quote_cost
+    quote={"return_trip_rule":"ROUND_TRIP","callout_fee_vnd":0,"rate_per_km_vnd":1000,"stop_fee_vnd":0,"minimum_fare_vnd":0,
+           "waiting_free_min":0,"waiting_fee_per_hour_vnd":0,"vat_rate_assumption":0}
+    assert quote_cost(12,1,quote,return_km=8)==20000
+    assert quote_cost(12,1,{**quote,"return_trip_rule":"ONE_WAY"},return_km=8)==12000
+
+
+def test_manual_assign_accepts_orders_missing_from_plan(client,db_session):
+    queued=client.post("/api/optimization-runs",json={"objective":"BALANCED","include_carriers":False,"time_limit_seconds":2})
+    result=optimize(db_session,queued.json()["id"],ORG_ID,SHARED_ACTOR_ID,{"objective":"BALANCED","include_carriers":False})
+    plan=db_session.get(Plan,result["plan_id"]); data=json.loads(plan.result_json)
+    route=next(r for r in data["routes"] if len(r["stops"])>=2)
+    other=next(r for r in data["routes"] if r["route_key"]!=route["route_key"] and r["stops"])
+    removed=route["stops"].pop()
+    plan.result_json=json.dumps(data); db_session.commit()
+    response=client.post(f"/api/plans/{plan.id}/assign",json={"order_id":removed["order_id"],"route_key":route["route_key"]})
+    assert response.status_code==200,response.text
+    latest=client.get("/api/plans/latest").json()["plan"]
+    assert latest["summary"]["assigned"]==sum(len(r["stops"]) for r in latest["routes"])
+    duplicate=client.post(f"/api/plans/{plan.id}/assign",json={"order_id":other["stops"][0]["order_id"],"route_key":route["route_key"]})
+    assert duplicate.status_code==409
