@@ -1,0 +1,17 @@
+{
+  "name": "fleetmix-ai",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -k -n API,WORKER,WEB -c blue,yellow,green \"npm run dev:api\" \"npm run dev:worker\" \"npm run dev:web\"",
+    "dev:api": "cd api && ..\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
+    "dev:worker": "cd api && ..\\.venv\\Scripts\\python.exe -m app.worker",
+    "dev:web": "cd web && npm run dev",
+    "test:api": "cd api && ..\\.venv\\Scripts\\python.exe -m pytest -q",
+    "typecheck": "cd web && npm run typecheck",
+    "build": "cd web && npm run build",
+    "test": "npm run test:api && npm run typecheck && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.7"
+  }
+}
